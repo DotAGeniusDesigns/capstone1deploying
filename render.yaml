@@ -3,7 +3,7 @@ services:
     name: fortune-teller-app
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn app:app --log-level info
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -17,12 +17,18 @@ services:
         fromDatabase:
           name: fortune-teller-db
           property: connectionString
+      - key: FLASK_APP
+        value: app.py
+    # Add health check
+    healthCheckPath: /
+    # Add automatic deploys
+    autoDeploy: true
 
 databases:
   - name: fortune-teller-db
     plan: free
-    databaseName: fortune_teller
-    user: fortune_user
+    # Important: use PostgreSQL 14 or higher
+    ipAllowList: []  # only allow internal connections
 
 # Specify the scripts to run after deployment
 envVarsGroups:

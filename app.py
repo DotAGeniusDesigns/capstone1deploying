@@ -21,14 +21,39 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default-dev-key-change-in-production')
 
-# Use DATABASE_URL from Render if available, otherwise use local database
+# Database configuration with better error handling
 database_url = os.getenv('DATABASE_URL')
-if database_url and database_url.startswith('postgres://'):
-    # Heroku/Render style postgres:// needs to be updated to postgresql://
-    database_url = database_url.replace('postgres://', 'postgresql://', 1)
-    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+if database_url:
+    # Check if it's using postgres:// which needs to be postgresql://
+    if database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    
+    # For Render's internal PostgreSQL    
+    if 'render.com' in database_url:
+        app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+    # For Supabase connections that might have specific connection params needed
+    elif 'supabase' in database_url:
+        # Ensure proper connection parameters for Supabase
+        if '?' not in database_url:
+            database_url += '?sslmode=require'
+        app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+    else:
+        app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 else:
+    # Fallback to SQLite for local development
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI', 'sqlite:///site.db')
+
+# Log the database URL (with password redacted for security)
+safe_db_url = app.config['SQLALCHEMY_DATABASE_URI']
+if safe_db_url and '@' in safe_db_url:
+    # Redact password for logging
+    parts = safe_db_url.split('@')
+    credentials = parts[0].split(':')
+    if len(credentials) > 2:
+        credentials[2] = '******'  # Hide password
+        parts[0] = ':'.join(credentials)
+        safe_db_url = '@'.join(parts)
+logger.info(f"Using database: {safe_db_url}")
 
 # Initialize extensions
 db.init_app(app)
@@ -43,9 +68,22 @@ else:
     logger.warning("OPENAI_API_KEY not found. AI fortune generation will be disabled.")
     client = None
 
-# Ensure proper context is pushed
+# Ensure proper context is pushed - with error handling for database connection
 with app.app_context():
-    db.create_all()
+    try:
+        # Don't automatically create tables in production
+        if app.debug or 'sqlite' in app.config['SQLALCHEMY_DATABASE_URI']:
+            db.create_all()
+            logger.info("Database tables created successfully")
+        else:
+            # In production, just check the database connection
+            from sqlalchemy import text
+            db.session.execute(text('SELECT 1'))
+            logger.info("Database connection verified")
+    except Exception as e:
+        logger.error(f"Database connection error: {e}")
+        # Don't fail startup completely, as migrations might fix the issue
+        # and we want the Flask CLI commands to be available
 
 # Admin role required decorator
 def admin_required(f):
