@@ -1,5 +1,4 @@
 from models import db, MBTITrait
-from app import app
 
 # Complete MBTI data
 mbti_data = [
@@ -85,17 +84,33 @@ mbti_data = [
     }
 ]
 
-def seed_mbti():
-    with app.app_context():
-        db.create_all()
-        for trait in mbti_data:
-            mbti_trait = MBTITrait(
-                type=trait['type'],
-                strengths=trait['strengths'],
-                weaknesses=trait['weaknesses']
-            )
-            db.session.add(mbti_trait)
-        db.session.commit()
+def seed_mbti_data(db_instance=None):
+    """Seed the MBTI traits table"""
+    if db_instance is None:
+        # This is for standalone execution
+        from app import app, db
+        with app.app_context():
+            _perform_seeding(db)
+    else:
+        # This is when called from another module
+        _perform_seeding(db_instance)
+        
+def _perform_seeding(db_instance):
+    # Clear existing data
+    db_instance.session.query(MBTITrait).delete()
+    
+    # Insert new data
+    for trait in mbti_data:
+        new_trait = MBTITrait(
+            type=trait['type'],
+            strengths=trait['strengths'],
+            weaknesses=trait['weaknesses']
+        )
+        db_instance.session.add(new_trait)
+    
+    db_instance.session.commit()
+    print("MBTI traits seeded successfully!")
 
-if __name__ == '__main__':
-    seed_mbti()
+# Allow running as a standalone script
+if __name__ == "__main__":
+    seed_mbti_data()

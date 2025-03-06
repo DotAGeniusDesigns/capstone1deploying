@@ -10,18 +10,38 @@ from dotenv import load_dotenv
 from functools import wraps
 import requests
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default-dev-key-change-in-production')
+
+# Use DATABASE_URL from Render if available, otherwise use local database
+database_url = os.getenv('DATABASE_URL')
+if database_url and database_url.startswith('postgres://'):
+    # Heroku/Render style postgres:// needs to be updated to postgresql://
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+else:
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI', 'sqlite:///site.db')
 
 # Initialize extensions
 db.init_app(app)
 bcrypt = Bcrypt(app)
 migrate = Migrate(app, db)
-client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+# Initialize OpenAI client if API key is available
+openai_api_key = os.getenv('OPENAI_API_KEY')
+if openai_api_key:
+    client = OpenAI(api_key=openai_api_key)
+else:
+    logger.warning("OPENAI_API_KEY not found. AI fortune generation will be disabled.")
+    client = None
 
 # Ensure proper context is pushed
 with app.app_context():
@@ -181,6 +201,9 @@ def generate_unique_fortune(astrological_fortune, mbti_strengths, mbti_weaknesse
     Returns:
         str: Generated unique fortune
     """
+    if client is None:
+        return f"Daily Fortune: {astrological_fortune}\n\nConsider your MBTI strengths: {mbti_strengths}\n\nBe mindful of: {mbti_weaknesses}\n\nChinese Zodiac Guidance: {chinese_zodiac_fortune}"
+        
     prompt = f""" 
     Astrological Fortune: {astrological_fortune}
     MBTI Strengths: {mbti_strengths}
@@ -190,15 +213,18 @@ def generate_unique_fortune(astrological_fortune, mbti_strengths, mbti_weaknesse
     Generate a unique daily fortune for user, using mainly the daily astrological fortune, but incorporate some of the other factors, and keep it under 70 words.
     """
 
-    completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are an AI that generates unique daily fortunes for users."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-
-    return completion.choices[0].message.content.strip()
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an AI that generates unique daily fortunes for users."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return completion.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"Error generating fortune with OpenAI: {e}")
+        return f"Daily Fortune: {astrological_fortune}\n\nConsider your MBTI strengths: {mbti_strengths}\n\nBe mindful of: {mbti_weaknesses}\n\nChinese Zodiac Guidance: {chinese_zodiac_fortune}"
 
 @app.route('/daily_fortune')
 @login_required
@@ -244,22 +270,36 @@ def daily_fortune():
 def generate_fortunes():
     if request.method == 'POST':
         zodiac_signs = ["capricorn", "aquarius", "pisces", "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio", "sagittarius"]
+        
+        rapidapi_key = os.getenv('RAPIDAPI_KEY')
+        if not rapidapi_key:
+            flash('RapidAPI key is missing. Please configure the RAPIDAPI_KEY environment variable.', 'danger')
+            return redirect(url_for('generate_fortunes'))
+            
         url = "https://horoscope-astrology.p.rapidapi.com/horoscope?day=today&sunsign={}"
         headers = {
             'x-rapidapi-host': "horoscope-astrology.p.rapidapi.com",
-            'x-rapidapi-key': os.getenv('RAPIDAPI_KEY')
+            'x-rapidapi-key': rapidapi_key
         }
 
-        for sign in zodiac_signs:
-            response = requests.get(url.format(sign), headers=headers)
-            if response.status_code == 200:
-                data = response.json()
-                fortune = data.get('horoscope', 'No fortune available today.')
-                new_fortune = DailyFortune(zodiac_sign=sign, fortune=fortune)
-                db.session.add(new_fortune)
-        
-        db.session.commit()
-        flash('Daily fortunes have been generated successfully!', 'success')
+        try:
+            for sign in zodiac_signs:
+                response = requests.get(url.format(sign), headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    fortune = data.get('horoscope', 'No fortune available today.')
+                    new_fortune = DailyFortune(zodiac_sign=sign, fortune=fortune)
+                    db.session.add(new_fortune)
+                else:
+                    logger.warning(f"Failed to get fortune for {sign}. Status code: {response.status_code}")
+            
+            db.session.commit()
+            flash('Daily fortunes have been generated successfully!', 'success')
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error generating fortunes: {e}")
+            flash(f'Error generating fortunes: {str(e)}', 'danger')
+            
         return redirect(url_for('generate_fortunes'))
     
     return render_template('generate_fortunes.html')
@@ -272,5 +312,69 @@ def logout():
     flash('You have been logged out!', 'info')
     return redirect(url_for('index'))
 
+# CLI commands for database management
+@app.cli.command("seed-db")
+def seed_database():
+    """Seed the database with initial data."""
+    from seed_mbti import seed_mbti_data
+    from seed_chinese_zodiac import seed_chinese_zodiac_data
+    
+    try:
+        # Seed MBTI data
+        seed_mbti_data(db)
+        logger.info("MBTI data seeded successfully")
+        
+        # Seed Chinese Zodiac data
+        seed_chinese_zodiac_data(db)
+        logger.info("Chinese Zodiac data seeded successfully")
+        
+        print("Database seeded successfully!")
+    except Exception as e:
+        logger.error(f"Error seeding database: {e}")
+        print(f"Error seeding database: {e}")
+
+@app.cli.command("create-admin")
+def create_admin():
+    """Create an admin user."""
+    from getpass import getpass
+    
+    username = input("Admin username: ")
+    email = input("Admin email: ")
+    password = getpass("Admin password: ")
+    name = input("Admin name: ")
+    birthday_str = input("Admin birthday (YYYY-MM-DD): ")
+    
+    try:
+        birthday = datetime.strptime(birthday_str, "%Y-%m-%d").date()
+        
+        # Check if user already exists
+        existing_user = User.query.filter_by(username=username).first()
+        if existing_user:
+            print(f"User {username} already exists.")
+            return
+            
+        # Create new admin user
+        hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+        chinese_zodiac = get_chinese_zodiac(birthday.year)
+        
+        admin = User(
+            username=username,
+            email=email,
+            password=hashed_password,
+            name=name,
+            birthday=birthday,
+            role='admin',
+            chinese_zodiac=chinese_zodiac
+        )
+        
+        db.session.add(admin)
+        db.session.commit()
+        print(f"Admin user {username} created successfully!")
+    except ValueError:
+        print("Invalid date format. Please use YYYY-MM-DD.")
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error creating admin: {e}")
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)

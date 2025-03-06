@@ -1,5 +1,4 @@
 from models import db, ChineseZodiac
-from app import app
 
 # Sample Chinese Zodiac data
 chinese_zodiac_data = [
@@ -53,16 +52,32 @@ chinese_zodiac_data = [
     }
 ]
 
-def seed_chinese_zodiac():
-    with app.app_context():
-        db.create_all()
-        for zodiac in chinese_zodiac_data:
-            chinese_zodiac = ChineseZodiac(
-                sign=zodiac['sign'],
-                yearly_fortune_2024=zodiac['yearly_fortune_2024']
-            )
-            db.session.add(chinese_zodiac)
-        db.session.commit()
+def seed_chinese_zodiac_data(db_instance=None):
+    """Seed the Chinese Zodiac table"""
+    if db_instance is None:
+        # This is for standalone execution
+        from app import app, db
+        with app.app_context():
+            _perform_seeding(db)
+    else:
+        # This is when called from another module
+        _perform_seeding(db_instance)
+        
+def _perform_seeding(db_instance):
+    # Clear existing data
+    db_instance.session.query(ChineseZodiac).delete()
+    
+    # Insert new data
+    for zodiac in chinese_zodiac_data:
+        new_zodiac = ChineseZodiac(
+            sign=zodiac['sign'],
+            yearly_fortune_2024=zodiac['yearly_fortune_2024']
+        )
+        db_instance.session.add(new_zodiac)
+    
+    db_instance.session.commit()
+    print("Chinese Zodiac data seeded successfully!")
 
-if __name__ == '__main__':
-    seed_chinese_zodiac()
+# Allow running as a standalone script
+if __name__ == "__main__":
+    seed_chinese_zodiac_data()
