@@ -1,0 +1,9 @@
+{% extends 'base.html' %}
+
+{% block title %}Home{% endblock %}
+
+{% block content %}
+    <h2>Welcome to Daily Fortune</h2>
+    <p>Your daily horoscope awaits you. Sign up or log in to get started.</p>
+    <p><a href="{{ url_for('generate_fortunes') }}" class="btn btn-primary">Generate Today's Fortunes</a></p>
+{% endblock %}

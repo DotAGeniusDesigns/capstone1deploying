@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+
+{% block title %}Your Unique Daily Fortune{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h2>Hello {{ user.name }},</h2>
+    <p>Your daily fortune for today, {{ current_date }}, with the zodiac sign of {{ zodiac_sign|title }}, born in the
+        year of the {{ user.chinese_zodiac|title }}, and having the MBTI type of {{ user.mbti }}:</p>
+    <blockquote>
+        <p>{{ fortune }}</p>
+    </blockquote>
+    <hr>
+    <p>Come back tomorrow for another personalized fortune!</p>
+</div>
+{% endblock %}
